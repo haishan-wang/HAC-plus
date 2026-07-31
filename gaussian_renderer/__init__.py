@@ -189,7 +189,6 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
 
     offsets = offsets * scaling_repeat[:, :3]  # [N_opacity_pos_gaussian, 3]
     xyz = repeat_anchor + offsets  # [N_opacity_pos_gaussian, 3]
-
     binary_grid_masks_pergaussian = binary_grid_masks.view(-1, 1)
     if is_training:
         opacity = opacity * binary_grid_masks_pergaussian[mask]
@@ -206,7 +205,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     if is_training:
         return xyz, color, opacity, scaling, rot, neural_opacity, mask, bit_per_param, bit_per_feat_param, bit_per_scaling_param, bit_per_offsets_param
     else:
-        return xyz, color, opacity, scaling, rot, time_sub
+        return xyz, color, opacity, scaling, rot, time_sub, mask
 
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, visible_mask=None, retain_grad=False, step=0):
@@ -220,7 +219,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     if is_training:
         xyz, color, opacity, scaling, rot, neural_opacity, mask, bit_per_param, bit_per_feat_param, bit_per_scaling_param, bit_per_offsets_param = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training, step=step)
     else:
-        xyz, color, opacity, scaling, rot, time_sub = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training, step=step)
+        xyz, color, opacity, scaling, rot, time_sub, _ = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training, step=step)
 
     screenspace_points = torch.zeros_like(xyz, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
     if retain_grad:

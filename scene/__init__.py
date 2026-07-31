@@ -92,10 +92,12 @@ class Scene:
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "checkpoint.pth"))
-            self.gaussians.load_anchor_limit(os.path.join(self.model_path,
-                                                           "point_cloud",
-                                                           "iteration_" + str(self.loaded_iter),
-                                                           "anchor_limit.pkl"))
+            anchor_limit_path = os.path.join(self.model_path,
+                                              "point_cloud",
+                                              "iteration_" + str(self.loaded_iter),
+                                              "anchor_limit.pkl")
+            if os.path.exists(anchor_limit_path):
+                self.gaussians.load_anchor_limit(anchor_limit_path)
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
