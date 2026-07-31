@@ -1,24 +1,28 @@
-name: HAC_env
+name: HACplus_env
 channels:
   - pytorch
   - pyg
   - conda-forge
   - defaults
 dependencies:
-  - cudatoolkit=11.6
+  - ninja
+  - pyg
+  - cuda-version=12.4
+  - cuda-toolkit=12.4
+  - python=3.11
   - plyfile=0.8.1
-  - python=3.7.13
-  - pip=22.3.1
-  - pytorch=1.12.1
-  - torchaudio=0.12.1
-  - torchvision=0.13.1
-  - pytorch-scatter
+  - pytorch=2.4.1
+  - torchvision=0.19.1
   - tqdm
+  - pytorch-scatter
   - pip:
     - einops
     - wandb
     - lpips
-    - submodules/diff-gaussian-rasterization
-    - submodules/simple-knn
-    - submodules/gridencoder
-    - submodules/arithmetic
+    - colorama
+    - opencv-python
+  # The CUDA-extension submodules (diff-gaussian-rasterization, gridencoder,
+  # arithmetic) are installed separately by scripts/env_builder.sh with
+  # --no-build-isolation, since their setup.py imports torch at build time
+  # and pip's isolated build env can't see it otherwise.
+  # simple-knn is unused by this codebase and intentionally left out.
