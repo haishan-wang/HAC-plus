@@ -1,0 +1,6 @@
+submodules/
+__pycache__/
+outputs/
+sbatch_logs/
+wandb/
+tmp/

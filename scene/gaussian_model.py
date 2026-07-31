@@ -10,13 +10,14 @@
 #
 
 import os
+import pickle
 import time
 from functools import reduce
 
 import numpy as np
 import torch
 from plyfile import PlyData, PlyElement
-from simple_knn._C import distCUDA2
+from scipy.spatial import KDTree
 from torch import nn
 from torch_scatter import scatter_max
 
@@ -39,6 +40,13 @@ from utils.gpcc_utils import compress_gpcc, decompress_gpcc, calculate_morton_or
 
 bit2MB_scale = 8 * 1024 * 1024
 MAX_batch_size = 3000
+
+def distCUDA2(points):
+    points_np = points.detach().cpu().float().numpy()
+    dists, inds = KDTree(points_np).query(points_np, k=4)
+    meanDists = (dists[:, 1:] ** 2).mean(1)
+    return torch.tensor(meanDists, dtype=points.dtype, device=points.device)
+
 
 def get_time():
     torch.cuda.synchronize()
@@ -761,6 +769,15 @@ class GaussianModel(nn.Module):
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
+
+    def save_anchor_limit(self, path):
+        with open(path, "wb") as f:
+            pickle.dump((self.x_bound_min, self.x_bound_max), f)
+        # self.x_bound_min, self.x_bound_max
+        
+    def load_anchor_limit(self, path):
+        with open(path, "rb") as f:
+            self.x_bound_min, self.x_bound_max = pickle.load(f)
 
     def load_ply_sparse_gaussian(self, path):
         plydata = PlyData.read(path)

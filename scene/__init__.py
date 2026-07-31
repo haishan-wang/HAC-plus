@@ -92,6 +92,10 @@ class Scene:
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "checkpoint.pth"))
+            self.gaussians.load_anchor_limit(os.path.join(self.model_path,
+                                                           "point_cloud",
+                                                           "iteration_" + str(self.loaded_iter),
+                                                           "anchor_limit.pkl"))
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
 
@@ -99,6 +103,7 @@ class Scene:
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
         self.gaussians.save_mlp_checkpoints(os.path.join(point_cloud_path, "checkpoint.pth"))
+        self.gaussians.save_anchor_limit(os.path.join(point_cloud_path, "anchor_limit.pkl"))
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]

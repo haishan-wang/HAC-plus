@@ -1,0 +1,3 @@
+'''
+please  read the train.py, then you can know how to load the model from the checkpoint, and the please run the model on the test set, but you don't need to generate the images, just get the mask from the line 162 of gaussian_render/__init__.py. The 1 in mask means the splat is visible, and 0 means the splat is invisible. Then you can estimate the visibility ratio of the splats in the view. Please get the average visibility ratio of the splats in all test sets for the scenes. And store all the scenes for one view 
+'''

@@ -276,7 +276,7 @@ class GridEncoder(nn.Module):
         self.params.data.uniform_(-std, std)
 
     def __repr__(self):
-        return f"GridEncoder: num_dim={self.num_dim} n_levels={self.n_levels} n_features={self.n_features} resolution={self.base_resolution} -> {int(round(self.base_resolution * self.per_level_scale ** (self.n_levels - 1)))} per_level_scale={self.per_level_scale:.4f} params={tuple(self.params.shape)} gridtype={self.gridtype} align_corners={self.align_corners} interpolation={self.interpolation}"
+        return f"GridEncoder(num_dim={self.num_dim}, n_levels={self.n_levels}, n_features={self.n_features}, log2_hashmap_size={self.log2_hashmap_size}, ste_binary={self.ste_binary}, ste_multistep={self.ste_multistep}, add_noise={self.add_noise}, Q={self.Q})"
 
     def forward(self, inputs, min_level_id=None, max_level_id=None, test_phase=False, outspace_params=None, binary_vxl=None, PV=0):
         # inputs: [..., num_dim], normalized real world positions in [0, 1]
