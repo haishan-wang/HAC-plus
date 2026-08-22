@@ -4,3 +4,6 @@ outputs/
 sbatch_logs/
 wandb/
 tmp/
+path_output/
+
+*.png

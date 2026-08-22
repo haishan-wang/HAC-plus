@@ -216,7 +216,7 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
             # Log and save
             torch.cuda.synchronize(); t_start_log = time.time()
-            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
+            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path, image_record=args_param.image_record)
             if (iteration in saving_iterations):
                 logger.info("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -280,7 +280,7 @@ def prepare_output_and_logger(args):
     return tb_writer
 
 
-def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, wandb=None, logger=None, pre_path_name=''):
+def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, wandb=None, logger=None, pre_path_name='', image_record=False):
     if tb_writer:
         tb_writer.add_scalar(f'{dataset_name}/train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar(f'{dataset_name}/train_loss_patches/total_loss', loss.item(), iteration)
@@ -345,6 +345,15 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
                         ssim_test += ssim(image, gt_image)
                         # lpips_test += lpips_fn(image, gt_image, normalize=False).detach().mean().double()
                         # lpips_test += lpips(image, gt_image, net_type='vgg').detach().mean().double()
+
+                        if image_record and config['name'] == 'test' and idx < 3:
+                            record_path = os.path.join(pre_path_name, "test_record_images", f"iter_{iteration}")
+                            os.makedirs(record_path, exist_ok=True)
+                            torchvision.utils.save_image(image.squeeze(0), os.path.join(record_path, f"{idx:02d}_render.png"))
+
+                            gt_path = os.path.join(pre_path_name, "test_record_images", f"{idx:02d}_gt.png")
+                            if not os.path.exists(gt_path):
+                                torchvision.utils.save_image(gt_image.squeeze(0), gt_path)
 
                     psnr_test /= len(config['cameras'])
                     ssim_test /= len(config['cameras'])
@@ -643,6 +652,10 @@ if __name__ == "__main__":
     parser.add_argument("--log2_2D", type=int, default = 15)
     parser.add_argument("--n_features", type=int, default = 4)
     parser.add_argument("--lmbda", type=float, default = 0.001)
+    parser.add_argument("--image_record", action="store_true", default=False,
+                         help="Save the first 3 test-set images to disk at each test iteration.")
+    parser.add_argument("--wandb_exp_name", type=str, default=None,
+                         help="Name of the wandb run. Defaults to the model_path-derived name.")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -667,7 +680,7 @@ if __name__ == "__main__":
         logger.info(f'save code failed~')'''
 
     dataset = args.source_path.split('/')[-1]
-    exp_name = args.model_path.split('/')[-2]
+    exp_name = args.wandb_exp_name if args.wandb_exp_name is not None else args.model_path.split('/')[-2]
 
     if args.use_wandb:
         wandb.login()
