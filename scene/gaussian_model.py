@@ -38,15 +38,18 @@ from utils.encodings_cuda import \
     encoder_gaussian_chunk, decoder_gaussian_chunk, encoder_gaussian_mixed_chunk, decoder_gaussian_mixed_chunk
 from utils.gpcc_utils import compress_gpcc, decompress_gpcc, calculate_morton_order
 
-bit2MB_scale = 8 * 1024 * 1024
-MAX_batch_size = 3000
 
 def distCUDA2(points):
+    # CPU drop-in for simple_knn's distCUDA2 (avoids the simple-knn build): mean squared distance
+    # to the 3 nearest neighbours, excluding the point itself.
     points_np = points.detach().cpu().float().numpy()
     dists, inds = KDTree(points_np).query(points_np, k=4)
     meanDists = (dists[:, 1:] ** 2).mean(1)
     return torch.tensor(meanDists, dtype=points.dtype, device=points.device)
 
+
+bit2MB_scale = 8 * 1024 * 1024
+MAX_batch_size = 3000
 
 def get_time():
     torch.cuda.synchronize()
@@ -1369,6 +1372,22 @@ class GaussianModel(nn.Module):
         print('codec time:', t_codec)
 
         # 32*3*2/bit2MB_scale is for xyz_bound_min and xyz_bound_max
+        bit_mlp = self.get_mlp_size()[0]
+        bit_total = bit_anchor + bit_feat + bit_scaling + bit_offsets + bit_hash + bit_masks + bit_mlp + 32*3*2
+        # structured copy of the numbers below, consumed by train.py to write size.json
+        self.encoded_size_info = {
+            "anchor_MB": bit_anchor / bit2MB_scale,
+            "feat_MB": bit_feat / bit2MB_scale,
+            "scaling_MB": bit_scaling / bit2MB_scale,
+            "offsets_MB": bit_offsets / bit2MB_scale,
+            "hash_MB": bit_hash / bit2MB_scale,
+            "masks_MB": bit_masks / bit2MB_scale,
+            "mlp_MB": bit_mlp / bit2MB_scale,
+            "total_MB": bit_total / bit2MB_scale,  # MB here = 2**20 bytes, as in the HAC++ log
+            "total_bytes": bit_total / 8,
+            "num_encoded_anchors": int(N),
+            "enc_time_s": t2 - t1,
+        }
         log_info = f"\nEncoded sizes in MB: " \
                    f"anchor {round(bit_anchor/bit2MB_scale, 4)}, " \
                    f"feat {round(bit_feat/bit2MB_scale, 4)}, " \

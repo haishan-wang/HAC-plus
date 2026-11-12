@@ -25,4 +25,4 @@ dependencies:
   # arithmetic) are installed separately by scripts/env_builder.sh with
   # --no-build-isolation, since their setup.py imports torch at build time
   # and pip's isolated build env can't see it otherwise.
-  # simple-knn is unused by this codebase and intentionally left out.
+  # simple-knn is not needed: distCUDA2 is replaced by a CPU KDTree in scene/gaussian_model.py.

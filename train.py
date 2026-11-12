@@ -177,7 +177,7 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
         Ll1 = l1_loss(image, gt_image)
 
         ssim_loss = (1.0 - ssim(image, gt_image))
-        scaling_reg = (scaling[:,0]*scaling[:,1]*scaling[:,2]).mean()
+        scaling_reg = (scaling[:,0]*scaling[:,1]*scaling[:,2]).mean()  # = scaling.prod(dim=1).mean(); prod() is buggy in the new env
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * ssim_loss + 0.01*scaling_reg
 
         if bit_per_param is not None:
@@ -189,7 +189,8 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
         iter_end.record()
         info_train= {}
-        with torch.no_grad():
+        if wandb:  # debug stats only for wandb: the .item() syncs would otherwise inflate training time vs upstream
+          with torch.no_grad():
             # * log training info
             num_anchor = scene.gaussians.get_anchor.shape[0]
             num_visible_gs = torch.sum(radii > 0).item()
@@ -252,7 +253,7 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
     logger.info("\n Total Training time: {}".format(t_end-t_start-log_time_sub))
     
     total_training_time=t_end-t_start-log_time_sub
-    with open(Path(args.model_path) / "training_time.json", "w") as f:
+    with open(Path(args_param.model_path) / "training_time.json", "w") as f:
         json.dump({"total_training_time": total_training_time}, f, indent=2)
     
     return gaussians.x_bound_min, gaussians.x_bound_max
@@ -293,20 +294,21 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
         scene.gaussians.eval()
 
         if 1:
-            # if iteration == testing_iterations[-1]:
-            #     with torch.no_grad():
-            #         log_info = scene.gaussians.estimate_final_bits()
-            #         logger.info(log_info)
-            #     if run_codec:  # conduct encoding and decoding
-            #         with torch.no_grad():
-            #             bit_stream_path = os.path.join(pre_path_name, 'bitstreams')
-            #             os.makedirs(bit_stream_path, exist_ok=True)
-            #             # conduct encoding
-            #             log_info = scene.gaussians.conduct_encoding(pre_path_name=bit_stream_path)
-            #             logger.info(log_info)
-            #             # conduct decoding
-            #             log_info = scene.gaussians.conduct_decoding(pre_path_name=bit_stream_path)
-            #             logger.info(log_info)
+            if iteration == testing_iterations[-1]:
+                with torch.no_grad():
+                    log_info = scene.gaussians.estimate_final_bits()
+                    logger.info(log_info)
+                if run_codec:  # conduct encoding and decoding
+                    with torch.no_grad():
+                        bit_stream_path = os.path.join(pre_path_name, 'bitstreams')
+                        os.makedirs(bit_stream_path, exist_ok=True)
+                        # conduct encoding
+                        log_info = scene.gaussians.conduct_encoding(pre_path_name=bit_stream_path)
+                        logger.info(log_info)
+                        # conduct decoding
+                        log_info = scene.gaussians.conduct_decoding(pre_path_name=bit_stream_path)
+                        logger.info(log_info)
+                    save_size_info(scene.gaussians, pre_path_name)
             torch.cuda.empty_cache()
             validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                                   {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
@@ -589,7 +591,27 @@ def get_time():
     torch.cuda.synchronize()
     tt = time.time()
     return tt
-def fps_calculation(args_param, dataset : ModelParams, iteration : int, pipeline : PipelineParams):
+
+
+def save_size_info(gaussians, model_path):
+    """Write size.json from the numbers conduct_encoding just computed (call right after decoding)."""
+    size_info = dict(gaussians.encoded_size_info)
+    # after decoding, _mask is binary: anchors that survived masking and their active offsets
+    size_info["num_anchors"] = int(gaussians._anchor.shape[0])
+    size_info["num_active_gaussians"] = int(gaussians._mask[:, :gaussians.n_offsets].sum().item())
+    with open(os.path.join(model_path, "size.json"), "w") as f:
+        json.dump(size_info, f, indent=2)
+
+
+def fps_calculation(args_param, dataset : ModelParams, iteration : int, pipeline : PipelineParams,
+                    logger=None, n_frames=1000, n_warmup=50):
+    """
+    Rendering speed of the decoded model on the TEST cameras.
+    One frame = prefilter_voxel (anchor frustum culling) + render (neural-Gaussian MLP decoding +
+    rasterization), i.e. exactly what render_sets does per view, minus image saving / metrics.
+    Images are already on the GPU, nothing is copied to the CPU.
+    FPS = n_frames / wall time, timed with cuda.synchronize() around the whole loop, after n_warmup frames.
+    """
     with torch.no_grad():
         is_synthetic_nerf = os.path.exists(os.path.join(dataset.source_path, "transforms_train.json"))
         gaussians = GaussianModel(
@@ -610,25 +632,40 @@ def fps_calculation(args_param, dataset : ModelParams, iteration : int, pipeline
         gaussians.eval()
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-        
-        views = scene.getTrainCameras() + scene.getTestCameras()
-        # train_test_exp = dataset.train_test_exp
-        
+
+        views = scene.getTestCameras()
+
+        def render_one(view):
+            voxel_visible_mask = prefilter_voxel(view, gaussians, pipeline, background)
+            return render(view, gaussians, pipeline, background, visible_mask=voxel_visible_mask)
+
+        for i in range(n_warmup):
+            render_one(views[i % len(views)])
 
         start = get_time()
-        repeat = 1000
-        
-        for i in tqdm(range(repeat)):
-            view = views[i % len(views)]
-            # voxel_visible_mask = prefilter_voxel(view, gaussians, pipeline, background)
-            render(view, gaussians, pipeline, background, visible_mask=None)
+        for i in range(n_frames):
+            render_one(views[i % len(views)])
         end = get_time()
-        fps = repeat / (end - start)  
-        print(f"FPS: {fps}")
-        with open(Path(args.model_path) / "fps.json", "w") as f:
-            json.dump({"fps": fps}, f, indent=2)
-        
-        return fps
+        fps = n_frames / (end - start)
+
+        info = {
+            "fps": fps,
+            "ms_per_frame": 1000.0 * (end - start) / n_frames,
+            "n_frames": n_frames,
+            "n_warmup": n_warmup,
+            "n_test_views": len(views),
+            "image_hw": [int(views[0].image_height), int(views[0].image_width)],
+            "loaded_iter": scene.loaded_iter,
+            "num_anchors": int(gaussians.get_anchor.shape[0]),
+            "gpu": torch.cuda.get_device_name(),
+            "timed": "prefilter_voxel + render, test cameras, decoded model",
+        }
+        msg = f"FPS: {fps:.2f} ({info['ms_per_frame']:.3f} ms/frame, {n_frames} frames over {len(views)} test views, {info['gpu']})"
+        logger.info(msg) if logger is not None else print(msg)
+        with open(Path(dataset.model_path) / "fps.json", "w") as f:
+            json.dump(info, f, indent=2)
+
+        return info
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -642,7 +679,7 @@ if __name__ == "__main__":
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument('--warmup', action='store_true', default=False)
     parser.add_argument('--use_wandb', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
@@ -656,8 +693,13 @@ if __name__ == "__main__":
                          help="Save the first 3 test-set images to disk at each test iteration.")
     parser.add_argument("--wandb_exp_name", type=str, default=None,
                          help="Name of the wandb run. Defaults to the model_path-derived name.")
+    parser.add_argument("--fps_frames", type=int, default=1000,
+                         help="Number of timed frames (cycling over the test views) for fps.json.")
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
+    if run_codec and shutil.which('tmc3') is None:
+        sys.exit("tmc3 (G-PCC codec) not on PATH; needed for the final encoding. "
+                 "Build it with scripts/ex5full_benchmark/build_tmc3.sh and add its dir to PATH.")
 
     # enable logging
 
@@ -715,16 +757,48 @@ if __name__ == "__main__":
     # All done
     logger.info("\nTraining complete.")
 
-    # FPS calculation
-    fps_calculation(args, lp.extract(args), -1, pp.extract(args))
-    
-    
+    # Load the final iteration explicitly (-1 would silently pick e.g. iteration_1000 if training died).
+    final_iter = args.iterations
+    if run_codec:
+        assert os.path.exists(os.path.join(args.model_path, "size.json")), \
+            "size.json missing: encoding/decoding did not run, the saved ply is not the decoded model."
+
     # rendering
     logger.info(f'\nStarting Rendering~')
-    visible_count = render_sets(args, lp.extract(args), -1, pp.extract(args), wandb=wandb, logger=logger, x_bound_min=x_bound_min, x_bound_max=x_bound_max)
+    visible_count = render_sets(args, lp.extract(args), final_iter, pp.extract(args), wandb=wandb, logger=logger, x_bound_min=x_bound_min, x_bound_max=x_bound_max)
     logger.info("\nRendering complete.")
 
     # calc metrics
     logger.info("\n Starting evaluation...")
     evaluate(args.model_path, visible_count=visible_count, wandb=wandb, logger=logger)
     logger.info("\nEvaluating complete.")
+
+    # FPS (after evaluation, so a failure here does not lose the metrics)
+    torch.cuda.empty_cache()
+    fps_info = fps_calculation(args, lp.extract(args), final_iter, pp.extract(args), logger=logger, n_frames=args.fps_frames)
+
+    # one summary file per run, collected by scripts/ex5full_benchmark/collect.py
+    def _load(name):
+        path = os.path.join(args.model_path, name)
+        return json.load(open(path)) if os.path.exists(path) else {}
+    quality = _load("results.json").get(f"ours_{final_iter}", {})
+    size_info = _load("size.json")
+    summary = {
+        "model_path": args.model_path,
+        "source_path": args.source_path,
+        "lmbda": args.lmbda,
+        "iterations": final_iter,
+        "PSNR": quality.get("PSNR"),
+        "SSIM": quality.get("SSIM"),
+        "LPIPS": quality.get("LPIPS"),
+        "size_MB": size_info.get("total_MB"),
+        "size_bytes": size_info.get("total_bytes"),
+        "num_anchors": size_info.get("num_anchors"),
+        "num_active_gaussians": size_info.get("num_active_gaussians"),
+        "training_time_s": _load("training_time.json").get("total_training_time"),
+        "fps": fps_info["fps"],
+        "gpu": fps_info["gpu"],
+    }
+    with open(os.path.join(args.model_path, "metrics.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+    logger.info(f"\nSummary: {json.dumps(summary)}")
